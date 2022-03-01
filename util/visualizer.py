@@ -5,7 +5,7 @@ import ntpath
 import time
 from . import util, html
 from subprocess import Popen, PIPE
-
+from torch.utils.tensorboard import SummaryWriter
 
 try:
     import wandb
@@ -18,7 +18,7 @@ else:
     VisdomExceptionBase = ConnectionError
 
 
-def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256, use_wandb=False):
+def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256, use_wandb=False, use_tb=False):
     """Save images to the disk.
 
     Parameters:
@@ -30,6 +30,8 @@ def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256, use_w
 
     This function will save images stored in 'visuals' to the HTML file specified by 'webpage'.
     """
+    writer = SummaryWriter()
+    
     image_dir = webpage.get_image_dir()
     short_path = ntpath.basename(image_path[0])
     name = os.path.splitext(short_path)[0]
@@ -47,9 +49,12 @@ def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256, use_w
         links.append(image_name)
         if use_wandb:
             ims_dict[label] = wandb.Image(im)
+        if use_tb:
+            ims_dict[label] = writer.add_image('Image', im)
     webpage.add_images(ims, txts, links, width=width)
     if use_wandb:
         wandb.log(ims_dict)
+    ### tensorboard log equivalent ???
 
 
 class Visualizer():
@@ -76,6 +81,7 @@ class Visualizer():
         self.port = opt.display_port
         self.saved = False
         self.use_wandb = opt.use_wandb
+        self.use_tb = opt.use_tb
         self.current_epoch = 0
         self.ncols = opt.display_ncols
         
@@ -88,6 +94,9 @@ class Visualizer():
         if self.use_wandb:
             self.wandb_run = wandb.init(project='CycleGAN-and-pix2pix', name=opt.name, config=opt) if not wandb.run else wandb.run
             self.wandb_run._label(repo='CycleGAN-and-pix2pix')
+        
+        if self.use_tb:
+            self.writer = SummaryWriter("CycleGAN-and-pix2pix")
 
         if self.use_html:  # create an HTML object at <checkpoints_dir>/web/; images will be saved under <checkpoints_dir>/web/images/
             self.web_dir = os.path.join(opt.checkpoints_dir, opt.name, 'web')
@@ -185,7 +194,18 @@ class Visualizer():
                 self.current_epoch = epoch
                 result_table.add_data(*table_row)
                 self.wandb_run.log({"Result": result_table})
-
+                
+        if self.use_tb:
+            columns = [key for key, _ in visuals.items()]
+            columns.insert(0, 'epoch')
+            # table_row = [epoch]
+            # ims_dict = {}
+            for label, image in visuals.items():
+                image_numpy = util.tensor2im(image)
+                self.writer.add_image("Image1", image_numpy)
+            if epoch != self.current_epoch:
+                self.current_epoch = epoch
+                
 
         if self.use_html and (save_result or not self.saved):  # save images to an HTML file if they haven't been saved.
             self.saved = True
@@ -236,6 +256,8 @@ class Visualizer():
             self.create_visdom_connections()
         if self.use_wandb:
             self.wandb_run.log(losses)
+        if self.use_tb:
+            self.writer.add_scalar(losses)
 
     # losses: same format as |losses| of plot_current_losses
     def print_current_losses(self, epoch, iters, losses, t_comp, t_data):
